@@ -462,7 +462,7 @@ class _EmptyDayView extends StatelessWidget {
   const _EmptyDayView({required this.dayId, this.inAt, this.outAt});
   final String dayId;
   final DateTime? inAt;
-  final DateTime? outAt;
+  //final DateTime? outAt;
 
   @override
   Widget build(BuildContext context) {
