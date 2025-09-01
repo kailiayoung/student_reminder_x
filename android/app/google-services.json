@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "679398022451",
+    "project_id": "reminder-5cb70",
+    "storage_bucket": "reminder-5cb70.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:679398022451:android:1b8a8a68176f5c3083b246",
+        "android_client_info": {
+          "package_name": "com.example.student_remeinder_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCiqTS5f9ylWptsP89yHxYWaH0AQjGa35A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
