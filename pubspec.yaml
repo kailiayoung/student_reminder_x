@@ -36,6 +36,8 @@ dependencies:
   firebase_core: ^3.8.0
   cloud_firestore: ^5.6.0
   firebase_storage: ^12.3.7
+  
+  
 
   # UI and Navigation
   cupertino_icons: ^1.0.6
@@ -43,6 +45,7 @@ dependencies:
   image_picker: ^1.2.0
   crop_your_image: ^2.0.0
   permission_handler: ^11.0.1
+  geolocator: ^14.0.2
 
 dev_dependencies:
   flutter_test:
