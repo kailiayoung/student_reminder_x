@@ -1,12 +1,13 @@
 import 'dart:math';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:students_reminder/src/services/attendance_service.dart';
 import 'package:students_reminder/src/services/auth_service.dart';
-import 'package:geolocator/geolocator.dart';
 
 class AttendanceHistory14d extends StatefulWidget {
   const AttendanceHistory14d({super.key});
@@ -21,7 +22,6 @@ class _AttendanceHistory14dState extends State<AttendanceHistory14d> {
   @override
   Widget build(BuildContext context) {
     final uid = AuthService.instance.currentUser!.uid;
-    
     final now = JmTime.nowLocal();
     final end = DateTime(now.year, now.month, now.day);
 
@@ -71,10 +71,7 @@ class _AttendanceHistory14dState extends State<AttendanceHistory14d> {
                   return const Center(child: CircularProgressIndicator());
                 }
                 final docs = snap.data?.docs ?? <QueryDocumentSnapshot<Map<String, dynamic>>>[];
-
-                final byDate = <String, Map<String, dynamic>>{
-                  for (final d in docs) (d.data()['dayId'] as String): d.data(),
-                };
+                final byDate = {for (final d in docs) (d.data()['dayId'] as String): d.data()};
 
                 final items = <_DayItem>[];
                 for (int i = 13; i >= 0; i--) {
@@ -362,12 +359,10 @@ class _CalendarGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-
     return Padding(
       padding: const EdgeInsets.all(12),
       child: Column(
         children: [
-
           Wrap(
             spacing: 12,
             runSpacing: 8,
@@ -471,115 +466,38 @@ class DayMapModal extends StatefulWidget {
 
 class _DayMapModalState extends State<DayMapModal> {
   GoogleMapController? _controller;
+  bool _mapReady = false;
+  LatLng? _inLoc;
+  LatLng? _outLoc;
+  String status = 'absent';
+  DateTime? inAt;
+  DateTime? outAt;
 
   @override
-  Widget build(BuildContext context) {
+  void initState() {
+    super.initState();
+    _loadAttendance();
+  }
+
+  Future<void> _loadAttendance() async {
     final ref = FirebaseFirestore.instance
         .collection('attendance')
         .doc(widget.uid)
         .collection('days')
         .doc(widget.dayId);
-
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-          future: ref.get(),
-          builder: (context, snap) {
-            if (!snap.hasData) {
-              return const SizedBox(height: 420, child: Center(child: CircularProgressIndicator()));
-            }
-            final data = snap.data!.data();
-            if (data == null) {
-              return _EmptyDayView(dayId: widget.dayId);
-            }
-
-            final status = (data['status'] as String?) ?? 'absent';
-            final inAt = (data['inAt'] as Timestamp?)?.toDate();
-            final outAt = (data['outAt'] as Timestamp?)?.toDate();
-            final inLoc = _toLatLng(data['inLoc']);
-            final outLoc = _toLatLng(data['outLoc']);
-            final markers = <Marker>{
-              if (inLoc != null)
-                Marker(
-                  markerId: const MarkerId('in'),
-                  position: inLoc,
-                  infoWindow: InfoWindow(title: 'Clock In', snippet: _fmtJM(inAt)),
-                ),
-              if (outLoc != null)
-                Marker(
-                  markerId: const MarkerId('out'),
-                  position: outLoc,
-                  infoWindow: InfoWindow(title: 'Clock Out', snippet: _fmtJM(outAt)),
-                ),
-            };
-
-            final polylines = <Polyline>{
-              if (inLoc != null && outLoc != null)
-                Polyline(
-                  polylineId: const PolylineId('route'),
-                  points: [inLoc, outLoc],
-                  width: 4,
-                ),
-            };
-
-            final LatLng initial = inLoc ?? outLoc ?? const LatLng(18.0179, -76.8099);
-            final initialZoom = (inLoc != null && outLoc != null) ? 12.5 : 15.0;
-
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 8),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text('Attendance • ${widget.dayId}',
-                            style: Theme.of(context).textTheme.titleMedium),
-                      ),
-                      _statusChip(status),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 8),
-                SizedBox(
-                  height: 360,
-                  child: GoogleMap(
-                    initialCameraPosition: CameraPosition(target: initial, zoom: initialZoom),
-                    markers: markers,
-                    polylines: polylines,
-                    myLocationButtonEnabled: false,
-                    zoomControlsEnabled: true,
-                    mapToolbarEnabled: false,
-                    onMapCreated: (c) async {
-                      _controller = c;
-                      if (inLoc != null && outLoc != null) {
-                        final bounds = _latLngBoundsFrom(inLoc, outLoc);
-                        await Future.delayed(const Duration(milliseconds: 200));
-                        _controller?.animateCamera(CameraUpdate.newLatLngBounds(bounds, 60));
-                      }
-                    },
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Row(
-                    children: [
-                      Expanded(child: _InfoTile(label: 'Clock In', value: _fmtJM(inAt))),
-                      const SizedBox(width: 12),
-                      Expanded(child: _InfoTile(label: 'Clock Out', value: _fmtJM(outAt))),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-              ],
-            );
-          },
-        ),
-      ),
-    );
+    final snap = await ref.get();
+    if (!mounted) return;
+    final data = snap.data();
+    if (data != null) {
+      setState(() {
+        status = (data['status'] as String?) ?? 'absent';
+        inAt = (data['inAt'] as Timestamp?)?.toDate();
+        outAt = (data['outAt'] as Timestamp?)?.toDate();
+        _inLoc = _toLatLng(data['inLoc']);
+        _outLoc = _toLatLng(data['outLoc']);
+        _mapReady = true;
+      });
+    }
   }
 
   LatLng? _toLatLng(dynamic data) {
@@ -591,6 +509,97 @@ class _DayMapModalState extends State<DayMapModal> {
     final sw = LatLng(min(a.latitude, b.latitude), min(a.longitude, b.longitude));
     final ne = LatLng(max(a.latitude, b.latitude), max(a.longitude, b.longitude));
     return LatLngBounds(southwest: sw, northeast: ne);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final markers = <Marker>{
+      if (_inLoc != null)
+        Marker(markerId: const MarkerId('in'), position: _inLoc!, infoWindow: InfoWindow(title: 'Clock In', snippet: _fmtJM(inAt))),
+      if (_outLoc != null)
+        Marker(markerId: const MarkerId('out'), position: _outLoc!, infoWindow: InfoWindow(title: 'Clock Out', snippet: _fmtJM(outAt))),
+    };
+
+    final polylines = <Polyline>{
+      if (_inLoc != null && _outLoc != null)
+        Polyline(polylineId: const PolylineId('route'), points: [_inLoc!, _outLoc!], width: 4),
+    };
+
+    final initial = _inLoc ?? _outLoc ?? const LatLng(18.0179, -76.8099);
+    final initialZoom = (_inLoc != null && _outLoc != null) ? 12.5 : 15.0;
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: SizedBox(
+          height: 420,
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    Expanded(child: Text('Attendance • ${widget.dayId}', style: Theme.of(context).textTheme.titleMedium)),
+                    _statusChip(status),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: _mapReady && !kIsWeb
+                    ? GoogleMap(
+                        initialCameraPosition: CameraPosition(target: initial, zoom: initialZoom),
+                        markers: markers,
+                        polylines: polylines,
+                        myLocationButtonEnabled: false,
+                        zoomControlsEnabled: true,
+                        mapToolbarEnabled: false,
+                        onMapCreated: (c) async {
+                          _controller = c;
+                          if (_inLoc != null && _outLoc != null) {
+                            final bounds = _latLngBoundsFrom(_inLoc!, _outLoc!);
+                            await Future.delayed(const Duration(milliseconds: 200));
+                            _controller?.animateCamera(CameraUpdate.newLatLngBounds(bounds, 60));
+                          }
+                        },
+                      )
+                    : Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(20.0),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(Icons.map, size: 50, color: Colors.grey),
+                              const SizedBox(height: 10),
+                              Text(
+                                (_inLoc != null || _outLoc != null)
+                                    ? 'Map not supported. Showing coordinates below.'
+                                    : 'No location data available.',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(fontSize: 16),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+              ),
+              const SizedBox(height: 8),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    Expanded(child: _InfoTile(label: 'Clock In', value: _fmtJM(inAt))),
+                    const SizedBox(width: 12),
+                    Expanded(child: _InfoTile(label: 'Clock Out', value: _fmtJM(outAt))),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -616,26 +625,6 @@ class _InfoTile extends StatelessWidget {
           const SizedBox(height: 4),
           Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
         ],
-      ),
-    );
-  }
-}
-
-// ------------------ Empty Day View ------------------
-
-class _EmptyDayView extends StatelessWidget {
-  const _EmptyDayView({required this.dayId});
-  final String dayId;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 360,
-      child: Center(
-        child: Text(
-          'No attendance data for $dayId',
-          style: TextStyle(color: Colors.grey.shade600),
-        ),
       ),
     );
   }
