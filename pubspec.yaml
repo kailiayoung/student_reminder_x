@@ -49,6 +49,8 @@ dependencies:
   table_calendar: ^3.1.2
   geolocator: ^10.1.0
   google_maps_flutter: ^2.7.0
+  geocoding: ^2.0.1 
+  flutter_local_notifications: ^14.0.0
 
 dev_dependencies:
   flutter_test:
