@@ -1,9 +1,12 @@
+import 'dart:math';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:students_reminder/src/services/attendance_service.dart';
 import 'package:students_reminder/src/services/auth_service.dart';
+import 'package:geolocator/geolocator.dart';
 
 class AttendanceHistory14d extends StatefulWidget {
   const AttendanceHistory14d({super.key});
@@ -18,8 +21,7 @@ class _AttendanceHistory14dState extends State<AttendanceHistory14d> {
   @override
   Widget build(BuildContext context) {
     final uid = AuthService.instance.currentUser!.uid;
-
-    // Past 14 days inclusive (local)
+    
     final now = JmTime.nowLocal();
     final end = DateTime(now.year, now.month, now.day);
 
@@ -34,37 +36,193 @@ class _AttendanceHistory14dState extends State<AttendanceHistory14d> {
           ),
         ],
       ),
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: AttendanceService.streamLast14Days(uid),
-        builder: (context, snap) {
-          if (snap.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final docs = snap.data?.docs ?? <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+      body: Column(
+        children: [
+          // Clock In / Clock Out buttons
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () => _clockIn(uid),
+                    icon: const Icon(Icons.login),
+                    label: const Text("Clock In"),
+                    style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 48)),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () => _clockOut(uid),
+                    icon: const Icon(Icons.logout),
+                    label: const Text("Clock Out"),
+                    style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 48)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: AttendanceService.streamLast14Days(uid),
+              builder: (context, snap) {
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                final docs = snap.data?.docs ?? <QueryDocumentSnapshot<Map<String, dynamic>>>[];
 
-          // Lookup by 'dayId'
-          final byDate = <String, Map<String, dynamic>>{
-            for (final d in docs) (d.data()['dayId'] as String): d.data(),
-          };
+                final byDate = <String, Map<String, dynamic>>{
+                  for (final d in docs) (d.data()['dayId'] as String): d.data(),
+                };
 
-          // Fixed 14-day window (oldest → newest)
-          final items = <_DayItem>[];
-          for (int i = 13; i >= 0; i--) {
-            final day = end.subtract(Duration(days: i));
-            final id = JmTime.dateId(day);
-            items.add(_DayItem(date: day, dateId: id, data: byDate[id]));
-          }
+                final items = <_DayItem>[];
+                for (int i = 13; i >= 0; i--) {
+                  final day = end.subtract(Duration(days: i));
+                  final id = JmTime.dateId(day);
+                  items.add(_DayItem(date: day, dateId: id, data: byDate[id]));
+                }
 
-          return _showCalendar
-              ? _CalendarGrid(uid: uid, days: items)
-              : _HistoryList(uid: uid, days: items);
-        },
+                return _showCalendar
+                    ? _CalendarGrid(uid: uid, days: items)
+                    : _HistoryList(uid: uid, days: items);
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
+
+  // ------------------ Clock In ------------------
+  Future<void> _clockIn(String uid) async {
+    final now = DateTime.now();
+    final eightAM = DateTime(now.year, now.month, now.day, 8, 0);
+    final eightThirty = DateTime(now.year, now.month, now.day, 8, 30);
+
+    Position? location;
+    try {
+      location = await _getLocation();
+    } catch (e) {
+      _showSnack("Location error: $e");
+      return;
+    }
+
+    String status;
+    String? reason;
+    if (now.isAfter(eightAM) && now.isBefore(eightThirty)) {
+      status = "early";
+    } else if (now.isAfter(eightThirty) &&
+        now.isBefore(DateTime(now.year, now.month, now.day, 16))) {
+      status = "late";
+      reason = await _askLateReason();
+      if (reason == null || reason.trim().isEmpty) {
+        _showSnack("Late reason required.");
+        return;
+      }
+      status += " — Reason: $reason";
+    } else {
+      _showSnack("Too late to clock in.");
+      return;
+    }
+
+    await FirebaseFirestore.instance
+        .collection('attendance')
+        .doc(uid)
+        .collection('days')
+        .doc(JmTime.dateId(now))
+        .set({
+      'dayId': JmTime.dateId(now),
+      'inAt': Timestamp.fromDate(now),
+      'inLoc': GeoPoint(location.latitude, location.longitude),
+      'status': status,
+    }, SetOptions(merge: true));
+
+    _showSnack("Clocked in: $status at ${location.latitude}, ${location.longitude}");
+  }
+
+  // ------------------ Clock Out ------------------
+  Future<void> _clockOut(String uid) async {
+    final now = DateTime.now();
+
+    Position? location;
+    try {
+      location = await _getLocation();
+    } catch (e) {
+      _showSnack("Location error: $e");
+      return;
+    }
+
+    final dayDoc = FirebaseFirestore.instance
+        .collection('attendance')
+        .doc(uid)
+        .collection('days')
+        .doc(JmTime.dateId(now));
+
+    final snapshot = await dayDoc.get();
+    if (!snapshot.exists || snapshot.data()?['inAt'] == null) {
+      _showSnack("Cannot clock out before clocking in.");
+      return;
+    }
+
+    await dayDoc.set({
+      'outAt': Timestamp.fromDate(now),
+      'outLoc': GeoPoint(location.latitude, location.longitude),
+    }, SetOptions(merge: true));
+
+    _showSnack("Clocked out at ${location.latitude}, ${location.longitude}");
+  }
+
+  Future<Position> _getLocation() async {
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) throw 'Location services disabled';
+
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      permission = await Geolocator.requestPermission();
+      if (permission != LocationPermission.whileInUse &&
+          permission != LocationPermission.always) {
+        throw 'Location permission denied';
+      }
+    }
+
+    return await Geolocator.getCurrentPosition(
+      desiredAccuracy: LocationAccuracy.high,
+    );
+  }
+
+  Future<String?> _askLateReason() async {
+    String reason = '';
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Late Reason'),
+        content: TextField(
+          autofocus: true,
+          onChanged: (value) => reason = value,
+          decoration: const InputDecoration(hintText: 'Why are you late?'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, reason),
+            child: const Text('Submit'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSnack(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
 }
 
-/* ---------- Model + helpers ---------- */
+// ------------------ Models + Helpers ------------------
 
 class _DayItem {
   final DateTime date;
@@ -72,7 +230,22 @@ class _DayItem {
   final Map<String, dynamic>? data;
   _DayItem({required this.date, required this.dateId, required this.data});
 
-  String get status => (data?['status'] ?? 'absent').toString();
+  String get rawStatus => (data?['status'] ?? 'absent').toString();
+
+  String get status {
+    if (rawStatus.toLowerCase().startsWith('early')) return 'early';
+    if (rawStatus.toLowerCase().startsWith('late')) return 'late';
+    if (rawStatus.toLowerCase().startsWith('in_progress')) return 'in_progress';
+    return 'absent';
+  }
+
+  String? get reason {
+    if (rawStatus.contains('— Reason:')) {
+      return rawStatus.split('— Reason:')[1].trim();
+    }
+    return null;
+  }
+
   DateTime? get inAt => (data?['inAt'] as Timestamp?)?.toDate();
   DateTime? get outAt => (data?['outAt'] as Timestamp?)?.toDate();
 }
@@ -91,7 +264,7 @@ Color _statusColor(String status) {
   }
 }
 
-Widget _statusBadge(String status) {
+Widget _statusBadge(String status, [String? reason]) {
   final c = _statusColor(status);
   return Container(
     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -101,15 +274,50 @@ Widget _statusBadge(String status) {
       borderRadius: BorderRadius.circular(999),
     ),
     child: Text(
-      status.toUpperCase(),
+      reason != null ? '$status\n$reason' : status.toUpperCase(),
       style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: c),
+      textAlign: TextAlign.center,
+    ),
+  );
+}
+
+Widget _statusChip(String status, [String? reason]) {
+  Color c;
+  String label = status.toUpperCase();
+  switch (status.toLowerCase()) {
+    case 'early':
+      c = Colors.green;
+      break;
+    case 'late':
+      c = Colors.orange;
+      break;
+    case 'in_progress':
+      c = Colors.blue;
+      break;
+    case 'absent':
+    default:
+      c = Colors.red;
+      label = 'ABSENT';
+  }
+  if (reason != null) label += '\n$reason';
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+    decoration: BoxDecoration(
+      color: c.withOpacity(0.12),
+      border: Border.all(color: c.withOpacity(0.6)),
+      borderRadius: BorderRadius.circular(999),
+    ),
+    child: Text(
+      label,
+      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: c),
+      textAlign: TextAlign.center,
     ),
   );
 }
 
 String _fmtJM(DateTime? t) => t == null ? '—' : DateFormat.jm().format(t);
 
-/* ---------- List view ---------- */
+// ------------------ List View ------------------
 
 class _HistoryList extends StatelessWidget {
   const _HistoryList({required this.uid, required this.days});
@@ -137,7 +345,7 @@ class _HistoryList extends StatelessWidget {
                 Text('Out: ${_fmtJM(d.outAt)}'),
             ],
           ),
-          trailing: _statusBadge(d.status),
+          trailing: _statusBadge(d.status, d.reason),
           onTap: () => _openMapModal(context, uid: uid, dayId: d.dateId),
         );
       },
@@ -145,7 +353,7 @@ class _HistoryList extends StatelessWidget {
   }
 }
 
-/* ---------- Compact calendar grid (2×7) ---------- */
+// ------------------ Calendar Grid ------------------
 
 class _CalendarGrid extends StatelessWidget {
   const _CalendarGrid({required this.uid, required this.days});
@@ -154,12 +362,12 @@ class _CalendarGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 2 rows × 7 cols, oldest → newest
+
     return Padding(
       padding: const EdgeInsets.all(12),
       child: Column(
         children: [
-          // Legend
+
           Wrap(
             spacing: 12,
             runSpacing: 8,
@@ -238,7 +446,7 @@ class _Legend extends StatelessWidget {
   }
 }
 
-/* ---------- Map modal ---------- */
+// ------------------ Map Modal ------------------
 
 void _openMapModal(BuildContext context, {required String uid, required String dayId}) {
   showModalBottomSheet(
@@ -267,8 +475,10 @@ class _DayMapModalState extends State<DayMapModal> {
   @override
   Widget build(BuildContext context) {
     final ref = FirebaseFirestore.instance
-        .collection('attendance').doc(widget.uid)
-        .collection('days').doc(widget.dayId);
+        .collection('attendance')
+        .doc(widget.uid)
+        .collection('days')
+        .doc(widget.dayId);
 
     return SafeArea(
       child: Padding(
@@ -285,12 +495,10 @@ class _DayMapModalState extends State<DayMapModal> {
             }
 
             final status = (data['status'] as String?) ?? 'absent';
-            final inAt   = (data['inAt']  as Timestamp?)?.toDate();
-            final outAt  = (data['outAt'] as Timestamp?)?.toDate();
-            final inLoc  = _toLatLng(data['inLoc']);
+            final inAt = (data['inAt'] as Timestamp?)?.toDate();
+            final outAt = (data['outAt'] as Timestamp?)?.toDate();
+            final inLoc = _toLatLng(data['inLoc']);
             final outLoc = _toLatLng(data['outLoc']);
-
-            // Build markers
             final markers = <Marker>{
               if (inLoc != null)
                 Marker(
@@ -306,7 +514,6 @@ class _DayMapModalState extends State<DayMapModal> {
                 ),
             };
 
-            // Build polyline (in → out) if both present
             final polylines = <Polyline>{
               if (inLoc != null && outLoc != null)
                 Polyline(
@@ -316,8 +523,7 @@ class _DayMapModalState extends State<DayMapModal> {
                 ),
             };
 
-            // Choose initial camera
-            final LatLng initial = inLoc ?? outLoc ?? const LatLng(18.0179, -76.8099); // Kingston fallback
+            final LatLng initial = inLoc ?? outLoc ?? const LatLng(18.0179, -76.8099);
             final initialZoom = (inLoc != null && outLoc != null) ? 12.5 : 15.0;
 
             return Column(
@@ -348,13 +554,10 @@ class _DayMapModalState extends State<DayMapModal> {
                     mapToolbarEnabled: false,
                     onMapCreated: (c) async {
                       _controller = c;
-                      // If both markers exist, fit to bounds
                       if (inLoc != null && outLoc != null) {
                         final bounds = _latLngBoundsFrom(inLoc, outLoc);
                         await Future.delayed(const Duration(milliseconds: 200));
-                        _controller?.animateCamera(
-                          CameraUpdate.newLatLngBounds(bounds, 60),
-                        );
+                        _controller?.animateCamera(CameraUpdate.newLatLngBounds(bounds, 60));
                       }
                     },
                   ),
@@ -379,60 +582,19 @@ class _DayMapModalState extends State<DayMapModal> {
     );
   }
 
-  LatLng? _toLatLng(dynamic v) {
-    if (v is Map<String, dynamic>) {
-      final lat = v['lat'];
-      final lng = v['lng'];
-      if (lat is num && lng is num) {
-        return LatLng(lat.toDouble(), lng.toDouble());
-      }
-    }
+  LatLng? _toLatLng(dynamic data) {
+    if (data is GeoPoint) return LatLng(data.latitude, data.longitude);
     return null;
   }
 
-  // Fit two points into bounds
   LatLngBounds _latLngBoundsFrom(LatLng a, LatLng b) {
-    final sw = LatLng(
-      a.latitude  < b.latitude  ? a.latitude  : b.latitude,
-      a.longitude < b.longitude ? a.longitude : b.longitude,
-    );
-    final ne = LatLng(
-      a.latitude  > b.latitude  ? a.latitude  : b.latitude,
-      a.longitude > b.longitude ? a.longitude : b.longitude,
-    );
+    final sw = LatLng(min(a.latitude, b.latitude), min(a.longitude, b.longitude));
+    final ne = LatLng(max(a.latitude, b.latitude), max(a.longitude, b.longitude));
     return LatLngBounds(southwest: sw, northeast: ne);
   }
 }
 
-Widget _statusChip(String status) {
-  Color c;
-  String label = status.toUpperCase();
-  switch (status) {
-    case 'early':
-      c = Colors.green;
-      break;
-    case 'late':
-      c = Colors.orange;
-      break;
-    case 'in_progress':
-      c = Colors.blue;
-      break;
-    case 'absent':
-    default:
-      c = Colors.red;
-      label = 'ABSENT';
-  }
-  return Container(
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-    decoration: BoxDecoration(
-      color: c.withOpacity(0.12),
-      border: Border.all(color: c.withOpacity(0.6)),
-      borderRadius: BorderRadius.circular(999),
-    ),
-    child: Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: c)),
-  );
-}
-
+// ------------------ Info Tile ------------------
 
 class _InfoTile extends StatelessWidget {
   const _InfoTile({required this.label, required this.value});
@@ -444,51 +606,36 @@ class _InfoTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        border: Border.all(color: Theme.of(context).dividerColor),
+        color: Colors.grey.shade100,
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: Theme.of(context).textTheme.labelMedium),
-          const SizedBox(height: 6),
-          Text(value, style: Theme.of(context).textTheme.titleMedium),
+          Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          const SizedBox(height: 4),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
         ],
       ),
     );
   }
 }
 
+// ------------------ Empty Day View ------------------
+
 class _EmptyDayView extends StatelessWidget {
-  const _EmptyDayView({required this.dayId, this.inAt, this.outAt});
+  const _EmptyDayView({required this.dayId});
   final String dayId;
-  final DateTime? inAt;
-  final DateTime? outAt;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text('Attendance • $dayId', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Icon(Icons.map_outlined, size: 64, color: Theme.of(context).disabledColor),
-          const SizedBox(height: 8),
-          Text(
-            'No location data for this day.',
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(child: _InfoTile(label: 'Clock In', value: _fmtJM(inAt))),
-              const SizedBox(width: 12),
-              Expanded(child: _InfoTile(label: 'Clock Out', value: _fmtJM(outAt))),
-            ],
-          ),
-          const SizedBox(height: 12),
-        ],
+    return SizedBox(
+      height: 360,
+      child: Center(
+        child: Text(
+          'No attendance data for $dayId',
+          style: TextStyle(color: Colors.grey.shade600),
+        ),
       ),
     );
   }

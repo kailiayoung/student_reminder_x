@@ -18,7 +18,7 @@ class MainLayoutPage extends StatefulWidget {
 class _MainLayoutPageState extends State<MainLayoutPage> {
   int _index = 0;
 
-    final _pages = const [HomePage(), MyNotesPage(), PublicFeeds(), AttendanceHistory14d(), ProfilePage()];
+    final _pages = [const HomePage(), const MyNotesPage(), PublicFeeds(), AttendanceHistory14d(), const ProfilePage()];
 
   @override
   Widget build(BuildContext context) {
