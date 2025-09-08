@@ -97,6 +97,92 @@ static bool shouldAutoClockOut(DateTime now) {
         .snapshots();
   }
 
+  /* ----- Admin Methods ----- */
+
+  /// Get attendance for all users on a specific date (for admin)
+  static Stream<QuerySnapshot<Map<String, dynamic>>> streamAllUsersAttendanceForDate(DateTime date) {
+    final dateId = JmTime.dateId(date);
+    return FirebaseFirestore.instance
+        .collectionGroup('days')
+        .where('dayId', isEqualTo: dateId)
+        .snapshots();
+  }
+
+  /// Get attendance for a specific user over date range (for admin)
+  static Stream<QuerySnapshot<Map<String, dynamic>>> streamUserAttendanceRange(
+    String userId, 
+    DateTime startDate, 
+    DateTime endDate
+  ) {
+    final startId = JmTime.dateId(startDate);
+    final endId = JmTime.dateId(endDate);
+    return FirebaseFirestore.instance
+        .collection('attendance')
+        .doc(userId)
+        .collection('days')
+        .where('dayId', isGreaterThanOrEqualTo: startId)
+        .where('dayId', isLessThanOrEqualTo: endId)
+        .orderBy('dayId', descending: true)
+        .snapshots();
+  }
+
+  /// Get all users' attendance for the current week (for admin dashboard)
+  static Stream<QuerySnapshot<Map<String, dynamic>>> streamCurrentWeekAttendance() {
+    final now = JmTime.nowLocal();
+    final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
+    final startId = JmTime.dateId(DateUtils.dateOnly(startOfWeek));
+    
+    return FirebaseFirestore.instance
+        .collectionGroup('days')
+        .where('dayId', isGreaterThanOrEqualTo: startId)
+        .orderBy('dayId', descending: true)
+        .snapshots();
+  }
+
+  /// Get attendance summary for a user (total present/absent/late days)
+  static Future<Map<String, int>> getAttendanceSummary(String userId, {DateTime? startDate, DateTime? endDate}) async {
+    final start = startDate ?? DateTime.now().subtract(const Duration(days: 30));
+    final end = endDate ?? DateTime.now();
+    
+    final startId = JmTime.dateId(start);
+    final endId = JmTime.dateId(end);
+    
+    final snapshot = await FirebaseFirestore.instance
+        .collection('attendance')
+        .doc(userId)
+        .collection('days')
+        .where('dayId', isGreaterThanOrEqualTo: startId)
+        .where('dayId', isLessThanOrEqualTo: endId)
+        .get();
+
+    int present = 0, absent = 0, late = 0;
+    
+    for (final doc in snapshot.docs) {
+      final data = doc.data();
+      final status = data['status'] as String? ?? 'absent';
+      
+      switch (status) {
+        case 'present':
+          present++;
+          break;
+        case 'late':
+          late++;
+          break;
+        case 'absent':
+        default:
+          absent++;
+          break;
+      }
+    }
+    
+    return {
+      'present': present,
+      'late': late,
+      'absent': absent,
+      'total': present + late + absent,
+    };
+  }
+
   /* ----- mutations ----- */
 
   /// Clock In
