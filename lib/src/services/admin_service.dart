@@ -398,7 +398,9 @@ class AdminService {
   // ATTENDANCE MANAGEMENT
 
   /// Get attendance overview for all students on a specific date
-  Stream<QuerySnapshot<Map<String, dynamic>>> getAttendanceForDate(DateTime date) {
+  Stream<QuerySnapshot<Map<String, dynamic>>> getAttendanceForDate(
+    DateTime date,
+  ) {
     return AttendanceService.streamAllUsersAttendanceForDate(date);
   }
 
@@ -408,7 +410,11 @@ class AdminService {
     DateTime startDate,
     DateTime endDate,
   ) {
-    return AttendanceService.streamUserAttendanceRange(userId, startDate, endDate);
+    return AttendanceService.streamUserAttendanceRange(
+      userId,
+      startDate,
+      endDate,
+    );
   }
 
   /// Get current week attendance overview
@@ -463,7 +469,8 @@ class AdminService {
     DateTime? startDate,
     DateTime? endDate,
   }) async {
-    final start = startDate ?? DateTime.now().subtract(const Duration(days: 30));
+    final start =
+        startDate ?? DateTime.now().subtract(const Duration(days: 30));
     final end = endDate ?? DateTime.now();
 
     // Get all students
@@ -477,7 +484,7 @@ class AdminService {
     for (final studentDoc in studentsSnapshot.docs) {
       final userId = studentDoc.id;
       final userData = studentDoc.data();
-      
+
       final summary = await AttendanceService.getAttendanceSummary(
         userId,
         startDate: start,
@@ -487,7 +494,8 @@ class AdminService {
       if (summary['absent']! >= absentThreshold) {
         absentees.add({
           'userId': userId,
-          'name': '${userData['firstName'] ?? ''} ${userData['lastName'] ?? ''}'.trim(),
+          'name': '${userData['firstName'] ?? ''} ${userData['lastName'] ?? ''}'
+              .trim(),
           'email': userData['email'] ?? '',
           'courseGroup': userData['courseGroup'] ?? '',
           'attendanceSummary': summary,
@@ -496,16 +504,21 @@ class AdminService {
     }
 
     // Sort by absence count (highest first)
-    absentees.sort((a, b) => 
-      (b['attendanceSummary']['absent'] as int)
-      .compareTo(a['attendanceSummary']['absent'] as int)
+    absentees.sort(
+      (a, b) => (b['attendanceSummary']['absent'] as int).compareTo(
+        a['attendanceSummary']['absent'] as int,
+      ),
     );
 
     return absentees;
   }
 
   /// Mark a student absent for a specific date (admin override)
-  Future<void> markStudentAbsent(String userId, DateTime date, {String? reason}) async {
+  Future<void> markStudentAbsent(
+    String userId,
+    DateTime date, {
+    String? reason,
+  }) async {
     final dateId = JmTime.dateId(date);
     final docRef = _db
         .collection('attendance')
@@ -530,8 +543,8 @@ class AdminService {
 
   /// Update attendance status (admin correction)
   Future<void> updateAttendanceStatus(
-    String userId, 
-    DateTime date, 
+    String userId,
+    DateTime date,
     String status, {
     String? reason,
   }) async {

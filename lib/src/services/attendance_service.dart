@@ -21,11 +21,13 @@ class JmTime {
   /// start: 08:00 (earliest clock-in)
   /// lateEdge: 08:30 (after this = "late")
   /// cutoff: 16:00 (auto clock-out threshold)
-  static ({DateTime start, DateTime lateEdge, DateTime cutoff}) windows(DateTime d) {
+  static ({DateTime start, DateTime lateEdge, DateTime cutoff}) windows(
+    DateTime d,
+  ) {
     final day = DateUtils.dateOnly(d);
-    final start   = onDate(day, 8, 0);
-    final late    = onDate(day, 8, 30);
-    final cutoff  = onDate(day, 16, 0);
+    final start = onDate(day, 8, 0);
+    final late = onDate(day, 8, 30);
+    final cutoff = onDate(day, 16, 0);
     return (start: start, lateEdge: late, cutoff: cutoff);
   }
 }
@@ -52,31 +54,36 @@ class AttendanceService {
 
   /* ----- helpers ----- */
   static String statusFromClockIn(DateTime t) {
-  final w = JmTime.windows(t); // named record
-  return t.isAfter(w.lateEdge) ? 'late' : 'early';
-}
+    final w = JmTime.windows(t); // named record
+    return t.isAfter(w.lateEdge) ? 'late' : 'early';
+  }
 
-static bool canClockInNow(DateTime now) {
-  final w = JmTime.windows(now);
-  final atOrAfterStart   = now.isAfter(w.start) || now.isAtSameMomentAs(w.start);
-  final atOrBeforeCutoff = now.isBefore(w.cutoff) || now.isAtSameMomentAs(w.cutoff);
-  return atOrAfterStart && atOrBeforeCutoff; // 08:00 ≤ now ≤ 16:00
-}
+  static bool canClockInNow(DateTime now) {
+    final w = JmTime.windows(now);
+    final atOrAfterStart =
+        now.isAfter(w.start) || now.isAtSameMomentAs(w.start);
+    final atOrBeforeCutoff =
+        now.isBefore(w.cutoff) || now.isAtSameMomentAs(w.cutoff);
+    return atOrAfterStart && atOrBeforeCutoff; // 08:00 ≤ now ≤ 16:00
+  }
 
-static bool shouldAutoClockOut(DateTime now) {
-  final w = JmTime.windows(now);
-  return now.isAfter(w.cutoff);
-}
-
+  static bool shouldAutoClockOut(DateTime now) {
+    final w = JmTime.windows(now);
+    return now.isAfter(w.cutoff);
+  }
 
   /* ----- streams ----- */
 
   /// Last 14 days (newest → oldest). UI builds a fixed 14-day window around this.
-  static Stream<QuerySnapshot<Map<String, dynamic>>> streamLast14Days(String uid) {
+  static Stream<QuerySnapshot<Map<String, dynamic>>> streamLast14Days(
+    String uid,
+  ) {
     final now = JmTime.nowLocal();
     final start = DateUtils.dateOnly(now).subtract(const Duration(days: 13));
     return FirebaseFirestore.instance
-        .collection('attendance').doc(uid).collection('days')
+        .collection('attendance')
+        .doc(uid)
+        .collection('days')
         .where('dayId', isGreaterThanOrEqualTo: JmTime.dateId(start))
         .orderBy('dayId', descending: true)
         .limit(14)
@@ -90,7 +97,9 @@ static bool shouldAutoClockOut(DateTime now) {
     String endDayId,
   ) {
     return FirebaseFirestore.instance
-        .collection('attendance').doc(uid).collection('days')
+        .collection('attendance')
+        .doc(uid)
+        .collection('days')
         .where('dayId', isGreaterThanOrEqualTo: startDayId)
         .where('dayId', isLessThanOrEqualTo: endDayId)
         .orderBy('dayId', descending: false)
@@ -100,7 +109,8 @@ static bool shouldAutoClockOut(DateTime now) {
   /* ----- Admin Methods ----- */
 
   /// Get attendance for all users on a specific date (for admin)
-  static Stream<QuerySnapshot<Map<String, dynamic>>> streamAllUsersAttendanceForDate(DateTime date) {
+  static Stream<QuerySnapshot<Map<String, dynamic>>>
+  streamAllUsersAttendanceForDate(DateTime date) {
     final dateId = JmTime.dateId(date);
     return FirebaseFirestore.instance
         .collectionGroup('days')
@@ -110,9 +120,9 @@ static bool shouldAutoClockOut(DateTime now) {
 
   /// Get attendance for a specific user over date range (for admin)
   static Stream<QuerySnapshot<Map<String, dynamic>>> streamUserAttendanceRange(
-    String userId, 
-    DateTime startDate, 
-    DateTime endDate
+    String userId,
+    DateTime startDate,
+    DateTime endDate,
   ) {
     final startId = JmTime.dateId(startDate);
     final endId = JmTime.dateId(endDate);
@@ -127,11 +137,12 @@ static bool shouldAutoClockOut(DateTime now) {
   }
 
   /// Get all users' attendance for the current week (for admin dashboard)
-  static Stream<QuerySnapshot<Map<String, dynamic>>> streamCurrentWeekAttendance() {
+  static Stream<QuerySnapshot<Map<String, dynamic>>>
+  streamCurrentWeekAttendance() {
     final now = JmTime.nowLocal();
     final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
     final startId = JmTime.dateId(DateUtils.dateOnly(startOfWeek));
-    
+
     return FirebaseFirestore.instance
         .collectionGroup('days')
         .where('dayId', isGreaterThanOrEqualTo: startId)
@@ -140,13 +151,18 @@ static bool shouldAutoClockOut(DateTime now) {
   }
 
   /// Get attendance summary for a user (total present/absent/late days)
-  static Future<Map<String, int>> getAttendanceSummary(String userId, {DateTime? startDate, DateTime? endDate}) async {
-    final start = startDate ?? DateTime.now().subtract(const Duration(days: 30));
+  static Future<Map<String, int>> getAttendanceSummary(
+    String userId, {
+    DateTime? startDate,
+    DateTime? endDate,
+  }) async {
+    final start =
+        startDate ?? DateTime.now().subtract(const Duration(days: 30));
     final end = endDate ?? DateTime.now();
-    
+
     final startId = JmTime.dateId(start);
     final endId = JmTime.dateId(end);
-    
+
     final snapshot = await FirebaseFirestore.instance
         .collection('attendance')
         .doc(userId)
@@ -156,11 +172,11 @@ static bool shouldAutoClockOut(DateTime now) {
         .get();
 
     int present = 0, absent = 0, late = 0;
-    
+
     for (final doc in snapshot.docs) {
       final data = doc.data();
       final status = data['status'] as String? ?? 'absent';
-      
+
       switch (status) {
         case 'present':
           present++;
@@ -174,7 +190,7 @@ static bool shouldAutoClockOut(DateTime now) {
           break;
       }
     }
-    
+
     return {
       'present': present,
       'late': late,
@@ -309,9 +325,13 @@ static bool shouldAutoClockOut(DateTime now) {
     }
   }
 }
+
 Future<void> markMissedDaysAbsent(String userId) async {
   final firestore = FirebaseFirestore.instance;
-  final attendanceRef = firestore.collection('attendance').doc(userId).collection('days');
+  final attendanceRef = firestore
+      .collection('attendance')
+      .doc(userId)
+      .collection('days');
 
   // Get all attendance dates (or just the latest one)
   final lastAttendanceSnapshot = await attendanceRef
@@ -323,7 +343,9 @@ Future<void> markMissedDaysAbsent(String userId) async {
 
   if (lastAttendanceSnapshot.docs.isEmpty) {
     // If no attendance at all, start from a default (e.g., semester start date)
-    lastDate = DateTime.now().subtract(Duration(days: 30)); // Or use actual semester start
+    lastDate = DateTime.now().subtract(
+      Duration(days: 30),
+    ); // Or use actual semester start
   } else {
     lastDate = DateTime.parse(lastAttendanceSnapshot.docs.first['date']);
   }
@@ -331,12 +353,20 @@ Future<void> markMissedDaysAbsent(String userId) async {
   // Go from lastDate + 1 to yesterday
   final now = DateTime.now();
   DateTime currentDate = lastDate.add(Duration(days: 1));
-  final yesterday = DateTime(now.year, now.month, now.day).subtract(Duration(days: 1));
+  final yesterday = DateTime(
+    now.year,
+    now.month,
+    now.day,
+  ).subtract(Duration(days: 1));
 
-  while (currentDate.isBefore(yesterday) || currentDate.isAtSameMomentAs(yesterday)) {
+  while (currentDate.isBefore(yesterday) ||
+      currentDate.isAtSameMomentAs(yesterday)) {
     // Only mark weekdays (Mon–Fri)
     if (currentDate.weekday >= 1 && currentDate.weekday <= 5) {
-      final dateString = currentDate.toIso8601String().substring(0, 10); // e.g., "2025-09-05"
+      final dateString = currentDate.toIso8601String().substring(
+        0,
+        10,
+      ); // e.g., "2025-09-05"
 
       final docRef = attendanceRef.doc(dateString);
       final doc = await docRef.get();
